@@ -24,6 +24,7 @@ end
 Base.getproperty(o::Undefined, k::Symbol) = getindex(o, k)
 Base.setproperty!(o::Undefined, k::Symbol, v) = setindex!(o, v, k)
 
+Base.show(io::IO, o::Undefined) = print(io, "Undefined(", join(path(o), " → "), ')')
 
 #------------------------------------------------------------------------------# Settings
 @kwdef struct Settings
