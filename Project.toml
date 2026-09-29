@@ -1,6 +1,6 @@
 name = "EasyConfig"
 uuid = "acab07b0-f158-46d4-8913-50acef6d41fe"
-version = "0.1.16"
+version = "0.2.0"
 authors = ["joshday <emailjoshday@gmail.com>"]
 
 [compat]
