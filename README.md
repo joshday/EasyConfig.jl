@@ -1,5 +1,4 @@
 [![Build status](https://github.com/JuliaComputing/EasyConfig.jl/workflows/CI/badge.svg)](https://github.com/JuliaComputing/EasyConfig.jl/actions?query=workflow%3ACI+branch%3Amaster)
-[![Codecov](https://codecov.io/gh/JuliaComputing/EasyConfig.jl/branch/master/graph/badge.svg)](https://codecov.io/gh/JuliaComputing/EasyConfig.jl)
 [![deps](https://juliahub.com/docs/EasyConfig/deps.svg)](https://juliahub.com/ui/Packages/EasyConfig/tMFix?t=2)
 [![version](https://juliahub.com/docs/EasyConfig/version.svg)](https://juliahub.com/ui/Packages/EasyConfig/tMFix)
 [![pkgeval](https://juliahub.com/docs/EasyConfig/pkgeval.svg)](https://juliahub.com/ui/Packages/EasyConfig/tMFix)
@@ -76,18 +75,9 @@ let
 end
 ```
 
-
 # Note
 
-- Accessing a property that doesn't exist will create an empty `Config()`.
-- Clean up stranded empty `Config`s with `delete_empty!(::Config)`.
-
-```julia
-c = Config()
-
-c.one.two.three.four.five.six == Config()
-
-# Internally we make the assumption that empty Config's shouldn't be there.
-# Some functions will therefore call `delete_empty!` under the hood:
-isempty(c) == true
-```
+- Accessing a non-existent property creates an `Undefined`.  
+- This is necessary for assigning deeply nested properties (an eventual `setindex!` after nested `getindex`-es).
+  - `config.a == Undefined(config, [:a])`, `config.a.b == Undefined(config, [:a, :b])`, etc.
+  - `config.a.b.c = 1` == `Undefined(config, [:a, :b])[:c] = 1`

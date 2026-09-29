@@ -1,0 +1,10 @@
+name: Dependabot auto-merge
+on: pull_request
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  auto-merge:
+    uses: RallypointOne/.github/.github/workflows/dependabot-automerge.yml@main
