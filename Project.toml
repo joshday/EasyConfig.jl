@@ -1,14 +1,9 @@
 name = "EasyConfig"
 uuid = "acab07b0-f158-46d4-8913-50acef6d41fe"
-authors = ["joshday <emailjoshday@gmail.com>"]
 version = "0.1.16"
-
-[deps]
-OrderedCollections = "bac558e1-5e72-5ebc-8fee-abe8a469f55d"
-StyledStrings = "f489334b-da3d-4c2e-b8f0-e476e12c162b"
+authors = ["joshday <emailjoshday@gmail.com>"]
 
 [compat]
-StyledStrings = "1.11.0"
 julia = "1"
 
 [extras]

@@ -1,6 +1,6 @@
 module EasyConfig
 
-export Config
+export Config, @config
 
 #------------------------------------------------------------------------------# Undefined
 # Lazy path of nested dicts
@@ -9,7 +9,7 @@ struct Undefined{T <: AbstractDict{Symbol, Any}}
     path::Vector{Symbol}
 end
 parent(o::Undefined) = getfield(o, :parent)
-path(o::Undefined) = getfield(o, :keys)
+path(o::Undefined) = getfield(o, :path)
 
 Base.getindex(o::Undefined, k::Symbol) = Undefined(parent(o), [path(o)..., k])
 function Base.setindex!(o::Undefined{T}, v, key::Symbol) where {T}
@@ -34,11 +34,18 @@ settings::Settings = Settings()
 #------------------------------------------------------------------------------# Config
 struct Config{D <: AbstractDict{Symbol, Any}} <: AbstractDict{Symbol, Any}
     dict::D
+    Config(dict::D) where {D <: AbstractDict{Symbol, Any}} = new{D}(dict)
 end
 Config() = Config(Dict{Symbol,Any}())
+Config(x::AbstractDict{Symbol}) = Config{Dict{Symbol,Any}}(x)
 Config{D}() where {D} = Config(D())
-Config{D}(x::AbstractDict{Symbol}) where {D} = Config(D((k => string(v) for (k,v) in x)...))
-
+function Config{D}(x::AbstractDict{Symbol}) where {D}
+    out = Config{D}()
+    for (k, v) in x
+        out[k] = v
+    end
+    out
+end
 function Config(x::Pair...; kw...)
     out = Config()
     for (k, v) in Iterators.flatten((x, kw))
@@ -53,6 +60,7 @@ dict(o::Config) = getfield(o, :dict)
 Base.getindex(o::Config, k::Symbol) = get(o, k, Undefined(o, [k]))
 Base.setindex!(o::Config, v, k::Symbol) = setindex!(dict(o), v, k)
 Base.setindex!(o::T, v::AbstractDict{Symbol}, k::Symbol) where {T <: Config} = setindex!(dict(o), T(v), k)
+Base.setindex!(o::T, v::T, k::Symbol) where {T <: Config} = setindex!(dict(o), v, k)
 
 Base.getindex(o::Config, k::AbstractString) = getindex(o, Symbol(k))
 Base.setindex!(o::Config, v, k::AbstractString) = setindex!(o, v, Symbol(k))
@@ -81,51 +89,60 @@ function Base.show(io::IO, o::Config)
     print(io, ')')
 end
 
-# #-----------------------------------------------------------------------------# @config
-# """
-#     @config expr
+#------------------------------------------------------------------------------# deepmerge
+# `merge`, but will update the keys of a nested dict rather than replacing the dict entirely
+function deepmerge!(a::T, b::AbstractDict) where {T <: AbstractDict}
+    foreach(pairs(b)) do (k, v)
+        old = get(a, k, nothing)
+        a[k] = v isa AbstractDict ? deepmerge!(old isa AbstractDict ? old : T(), v) : v
+    end
+    return a
+end
 
-# Create a `Config` with a NamedTuple-like or block syntax.  The following examples create equivalent `Config`s:
+deepmerge(a, b) = deepmerge!(deepmerge!(Config(), a), b)
 
-#     @config (x.one=1, x.two=2, z=3)
 
-#     @config x.one=1 x.two=2 z=3
+#-----------------------------------------------------------------------------# @config
+"""
+    @config expr
 
-#     @config begin
-#         x.one = 1
-#         x.two = 2
-#         z = 3
-#     end
+Create a `Config` with a NamedTuple-like or block syntax.  The following examples create equivalent `Config`s:
 
-#     let
-#         c = Config()
-#         c.x.one = 1
-#         c.x.two = 2
-#         c.z = 3
-#     end
-# """
-# macro config(ex...)
-#     exprs = collect(ex)
-#     if length(exprs) == 1
-#         ex = only(exprs)
-#         if ex.head == :block
-#             ex = Expr(:tuple, filter(x -> !(x isa LineNumberNode), ex.args)...)
-#         end
-#     else
-#         ex = Expr(:tuple, exprs...)
-#     end
-#     ex.head == :tuple || error("@config input must be a tuple")
-#     all(x -> x.head == :(=), ex.args) || error("Unexpected syntax in @config")
-#     x = gensym()
-#     out = Expr(:block, :(local $x = Config()))
-#     for val in ex.args
-#         lhs, rhs = val.args
-#         push!(out.args, :($(_prepend(x, lhs)) = $rhs))
-#     end
-#     push!(out.args, x)
-#     esc(out)
-# end
+    @config (x.one=1, x.two=2, z=3)
 
-# _prepend(val, e::Symbol) = :($val.$e)
-# _prepend(val, e) = e.head == :. && (e.args[1] = _prepend(val, e.args[1]); e)
+    @config x.one=1 x.two=2 z=3
+
+    @config begin
+        x.one = 1
+        x.two = 2
+        z = 3
+    end
+
+    let
+        c = Config()
+        c.x.one = 1
+        c.x.two = 2
+        c.z = 3
+    end
+"""
+macro config(ex...)
+    args = length(ex) == 1 ? _config_args(only(ex)) : collect(ex)
+    all(x -> Meta.isexpr(x, :(=), 2), args) || error("@config expects `key = value` expressions")
+    c = gensym("config")
+    body = map(x -> :($(_prepend(c, x.args[1])) = $(x.args[2])), args)
+    esc(Expr(:block, :(local $c = $Config()), body..., c))
+end
+
+function _config_args(ex)
+    Meta.isexpr(ex, :block) && return filter(x -> !(x isa LineNumberNode), ex.args)
+    Meta.isexpr(ex, :tuple) && return ex.args
+    return [ex]
+end
+
+_prepend(c, ex::Symbol) = :($c.$ex)
+function _prepend(c, ex)
+    Meta.isexpr(ex, :., 2) || error("@config expects keys like `x` or `x.y.z`, got: $ex")
+    Expr(:., _prepend(c, ex.args[1]), ex.args[2])
+end
+
 end # module
