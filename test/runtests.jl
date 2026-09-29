@@ -1,5 +1,4 @@
 using EasyConfig
-using OrderedCollections
 using Test
 
 @testset "Constructors" begin
@@ -17,6 +16,11 @@ using Test
         @test d[:y] == 2
     end
 
+    @testset "Config(::Config) doesn't rewrap" begin
+        c = Config(x=1)
+        @test Config(c) === c
+    end
+
     @testset "AbstractDict values become Configs" begin
         c = Config(Dict(:x => Dict(:y => Dict(:z => 1))))
         @test c.x isa Config
@@ -25,10 +29,27 @@ using Test
         c.a = Dict(:b => 2)
         @test c.a isa Config
         @test c.a.b == 2
+
+        c = Config(Dict{Symbol, Any}(:x => Dict(:y => Dict(:z => 1))))
+        @test c.x isa Config
+        @test c.x.y isa Config
+        @test c.x.y.z == 1
+
+        c = Config(IdDict{Symbol, Any}(:x => Dict(:y => 1)))
+        @test c.x isa Config{IdDict{Symbol, Any}}
+    end
+
+    @testset "Config values are stored, not copied" begin
+        c = Config()
+        s = Config()
+        c.s = s
+        s.x = 1
+        @test c.s === s
+        @test c.s.x == 1
     end
 
     @testset "Config{D}" begin
-        D = OrderedDict{Symbol, Any}
+        D = IdDict{Symbol, Any}
         @test Config{D}() isa Config{D}
         c = Config{D}(Dict(:x => 1))
         @test c isa Config{D}
@@ -64,12 +85,37 @@ end
         @test c.f.g == 3
     end
 
+    @testset "Reusing an Undefined doesn't overwrite earlier writes" begin
+        c = Config()
+        u = c.a.b
+        u.x = 1
+        u.y = 2
+        @test c.a.b.x == 1
+        @test c.a.b.y == 2
+    end
+
     @testset "Nested assignment preserves dict type" begin
-        c = Config(OrderedDict{Symbol, Any}())
+        c = Config(IdDict{Symbol, Any}())
         c.b.c = 1
         c.a = 2
-        @test c.b isa Config{OrderedDict{Symbol, Any}}
-        @test collect(keys(c)) == [:b, :a]
+        @test c.b isa Config{IdDict{Symbol, Any}}
+    end
+
+    @testset "Undefined can't be stored" begin
+        c = Config()
+        @test_throws ArgumentError c.b = c.a
+        @test_throws ArgumentError c.b.c = c.a
+        @test isempty(c)
+    end
+
+    @testset "String keys" begin
+        c = Config()
+        c["x"]["y"] = 1
+        @test c.x.y == 1
+        c."a"."b" = 2
+        @test c.a.b == 2
+        @test c."a"."b" == 2
+        @test c.z["w"] isa EasyConfig.Undefined
     end
 end
 
@@ -97,6 +143,30 @@ end
     @test a == b
     b.x = 2
     @test a.x == 1
+
+    @testset "get! returns the stored value" begin
+        c = Config()
+        r = get!(c, :x, Dict(:a => 1))
+        @test r isa Config
+        r.b = 2
+        @test c.x.b == 2
+        @test get!(c, "x", 0) === r
+        @test get!(() -> 0, c, :y) == 0
+        @test c.y == 0
+    end
+
+    @testset "Results keep the dict type" begin
+        D = IdDict{Symbol, Any}
+        c = Config(D(:x => 1, :y => 2))
+        @test empty(c) isa Config{D}
+        @test isempty(empty(c))
+        @test filter(p -> p[1] == :x, c) == Config(x=1)
+        @test filter(p -> p[1] == :x, c) isa Config{D}
+        @test merge(c, Config(z=3)) isa Config{D}
+        @test mergewith(+, c, Config(x=10)) isa Config{D}
+        @test mergewith(+, c, Config(x=10)).x == 11
+        @test EasyConfig.deepmerge(c, Config(z=3)) isa Config{D}
+    end
 end
 
 @testset "merge/merge!" begin
@@ -108,6 +178,13 @@ end
 
     merge!(a, b)
     @test a == Config(x=1, y=Config(z=2))
+
+    @test merge(Config(x=1), Dict(:y => Dict(:z => 2))) == Config(x=1, y=Config(z=2))
+    @test merge(Config(x=1), Config(y=2), Config(z=3)) == Config(x=1, y=2, z=3)
+
+    a = Config(y=Config(x=1))
+    @test EasyConfig.deepmerge(a, Config(y=Config(z=2))) == Config(y=Config(x=1, z=2))
+    @test a == Config(y=Config(x=1))
 
     a = Config(x=1, y=Config(x=1))
     b = Config(x=5, y=Config(x=5, z="hi"))
@@ -121,6 +198,11 @@ end
     @test repr(Config()) == "Config()"
     @test repr(Config(x=1)) == "Config(:x => 1)"
     @test repr(Config(x=Config(y="two"))) == "Config(:x => Config(:y => \"two\"))"
+
+    c = Config()
+    c.self = c
+    @test occursin("circular reference", repr(c))
+    @test occursin("circular reference", repr(MIME"text/plain"(), c))
 end
 
 @testset "@config" begin

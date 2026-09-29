@@ -13,9 +13,10 @@ path(o::Undefined) = getfield(o, :path)
 
 Base.getindex(o::Undefined, k::Symbol) = Undefined(parent(o), [path(o)..., k])
 function Base.setindex!(o::Undefined{T}, v, key::Symbol) where {T}
+    v = _value(T, v)  # validate before creating intermediate levels
     c = parent(o)
     for k in path(o)
-        c[k] = T()
+        haskey(c, k) || (c[k] = T())
         c = c[k]
     end
     c[key] = v
@@ -24,20 +25,23 @@ end
 Base.getproperty(o::Undefined, k::Symbol) = getindex(o, k)
 Base.setproperty!(o::Undefined, k::Symbol, v) = setindex!(o, v, k)
 
-Base.show(io::IO, o::Undefined) = print(io, "Undefined(", join(path(o), " → "), ')')
+Base.getindex(o::Undefined, k::AbstractString) = getindex(o, Symbol(k))
+Base.setindex!(o::Undefined, v, k::AbstractString) = setindex!(o, v, Symbol(k))
+Base.getproperty(o::Undefined, k::AbstractString) = getindex(o, Symbol(k))
+Base.setproperty!(o::Undefined, k::AbstractString, v) = setindex!(o, v, Symbol(k))
 
-#------------------------------------------------------------------------------# Settings
-@kwdef struct Settings
-    autoconvert::Vector{Union{UnionAll, DataType}} = [AbstractDict{Symbol}, NamedTuple]
-end
-settings::Settings = Settings()
+Base.show(io::IO, o::Undefined) = print(io, "Undefined(", join(path(o), " → "), ')')
 
 #------------------------------------------------------------------------------# Config
 struct Config{D <: AbstractDict{Symbol, Any}} <: AbstractDict{Symbol, Any}
     dict::D
-    Config(dict::D) where {D <: AbstractDict{Symbol, Any}} = new{D}(dict)
+    function Config(dict::D) where {D <: AbstractDict{Symbol, Any}}
+        map!(v -> _value(Config{D}, v), values(dict))
+        new{D}(dict)
+    end
 end
 Config() = Config(Dict{Symbol,Any}())
+Config(x::Config) = x
 Config(x::AbstractDict{Symbol}) = Config{Dict{Symbol,Any}}(x)
 Config{D}() where {D} = Config(D())
 function Config{D}(x::AbstractDict{Symbol}) where {D}
@@ -57,11 +61,15 @@ end
 
 dict(o::Config) = getfield(o, :dict)
 
+# Dict values are stored as Configs of the same type as their parent
+_value(::Type{T}, v) where {T <: Config} = v
+_value(::Type{T}, v::AbstractDict{Symbol}) where {T <: Config} = T(v)
+_value(::Type{T}, v::T) where {T <: Config} = v
+_value(::Type{<:Config}, v::Undefined) = throw(ArgumentError("Cannot store an undefined key path: $v"))
+
 ## Getting and Setting ##
 Base.getindex(o::Config, k::Symbol) = get(o, k, Undefined(o, [k]))
-Base.setindex!(o::Config, v, k::Symbol) = setindex!(dict(o), v, k)
-Base.setindex!(o::T, v::AbstractDict{Symbol}, k::Symbol) where {T <: Config} = setindex!(dict(o), T(v), k)
-Base.setindex!(o::T, v::T, k::Symbol) where {T <: Config} = setindex!(dict(o), v, k)
+Base.setindex!(o::T, v, k::Symbol) where {T <: Config} = setindex!(dict(o), _value(T, v), k)
 
 Base.getindex(o::Config, k::AbstractString) = getindex(o, Symbol(k))
 Base.setindex!(o::Config, v, k::AbstractString) = setindex!(o, v, Symbol(k))
@@ -69,24 +77,38 @@ Base.setindex!(o::Config, v, k::AbstractString) = setindex!(o, v, Symbol(k))
 Base.propertynames(o::Config) = keys(o)
 Base.getproperty(o::Config, k::Symbol) = getindex(o, k)
 Base.setproperty!(o::Config, k::Symbol, v) = setindex!(o, v, k)
+Base.getproperty(o::Config, k::AbstractString) = getindex(o, Symbol(k))
+Base.setproperty!(o::Config, k::AbstractString, v) = setindex!(o, v, Symbol(k))
 
 ## AbstractDict interface ##
 Base.get(o::Config, k::Symbol, default) = get(dict(o), k, default)
 Base.get(o::Config, k::AbstractString, default) = get(o, Symbol(k), default)
+# Return the stored value, which may be a converted `default`
+function Base.get!(f::Base.Callable, o::Config, k::Symbol)
+    haskey(dict(o), k) || (o[k] = f())
+    return dict(o)[k]
+end
+Base.get!(f::Base.Callable, o::Config, k::AbstractString) = get!(f, o, Symbol(k))
+Base.get!(o::Config, k::Union{Symbol, AbstractString}, default) = get!(() -> default, o, k)
 Base.iterate(o::Config, s...) = iterate(dict(o), s...)
 Base.length(o::Config) = length(dict(o))
+Base.empty(o::Config) = Config(empty(dict(o)))
 Base.empty!(o::Config) = (empty!(dict(o)); o)
 Base.delete!(o::Config, k::Symbol) = (delete!(dict(o), k); o)
 Base.delete!(o::Config, k::AbstractString) = delete!(o, Symbol(k))
-Base.merge(a::Config, b::Config) = Config(merge(dict(a), dict(b)))
+Base.merge(a::Config, bs::AbstractDict...) = merge!(copy(a), bs...)
 Base.merge!(a::Config, b::Config) = Config(merge!(dict(a), dict(b)))
+Base.mergewith(f, a::Config, bs::AbstractDict...) = mergewith!(f, copy(a), bs...)
 Base.copy(o::Config) = Config(copy(dict(o)))
 
 #------------------------------------------------------------------------------# show
 # What gets used to show nested Configs by the AbstractDict show method:
 function Base.show(io::IO, o::Config)
     print(io, "Config(")
-    join(io, map(((k, v),) -> "$(repr(k)) => $(repr(v; context=io))", collect(o)), ", ")
+    if !Base.show_circular(io, o)
+        recur_io = IOContext(io, :SHOWN_SET => o)
+        join(io, map(((k, v),) -> "$(repr(k)) => $(repr(v; context=recur_io))", collect(o)), ", ")
+    end
     print(io, ')')
 end
 
@@ -101,6 +123,7 @@ function deepmerge!(a::T, b::AbstractDict) where {T <: AbstractDict}
 end
 
 deepmerge(a, b) = deepmerge!(deepmerge!(Config(), a), b)
+deepmerge(a::Config, b) = deepmerge!(deepmerge!(empty(a), a), b)
 
 
 #-----------------------------------------------------------------------------# @config
